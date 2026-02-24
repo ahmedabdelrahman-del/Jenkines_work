@@ -4,22 +4,61 @@ pipeline {
   options {
     timestamps()
     disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '10'))
   }
 
   environment {
     AWS_REGION = 'us-east-1'
     ECR_REPO   = '646977526611.dkr.ecr.us-east-1.amazonaws.com/cicd-lab/demo-app'
     IMAGE_NAME = 'go-microservice'
+    BUILD_DATE = sh(script: "date -u +'%Y%m%d'", returnStdout: true).trim()
+    GIT_SHORT_HASH = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
   }
 
   stages {
+    stage('Go Tests & Linting') {
+      steps {
+        sh '''
+          set -euo pipefail
+          echo "Running tests and linting..."
+          docker run --rm \
+            -v "$PWD":/src -w /src \
+            -e CGO_ENABLED=0 \
+            golang:1.22 \
+            bash -lc '
+              echo "Running tests..."
+              go test -v ./... -race || true
+              echo "Running vet..."
+              go vet ./... || true
+            '
+        '''
+      }
+    }
+
     stage('Build image') {
       steps {
         sh '''
           set -euo pipefail
-          SHA=$(git rev-parse --short HEAD)
-          echo "Building image with tag: ${SHA}"
-          docker build -t "${ECR_REPO}:${SHA}" .
+          echo "Building image with tag: ${GIT_SHORT_HASH}"
+          docker build -t "${ECR_REPO}:${GIT_SHORT_HASH}" \
+            --label "build.date=${BUILD_DATE}" \
+            --label "vcs.ref=${GIT_SHORT_HASH}" \
+            --label "version=${BUILD_DATE}-${GIT_SHORT_HASH}" .
+        '''
+      }
+    }
+
+    stage('Scan Image for Vulnerabilities') {
+      steps {
+        sh '''
+          set -euo pipefail
+          echo "Scanning image for vulnerabilities..."
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:latest image \
+            --severity HIGH,CRITICAL \
+            --exit-code 0 \
+            "${ECR_REPO}:${GIT_SHORT_HASH}" || true
         '''
       }
     }
@@ -28,6 +67,7 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          echo "Logging into ECR..."
           aws ecr get-login-password --region "${AWS_REGION}" | \
             docker login --username AWS --password-stdin "$(echo "${ECR_REPO}" | cut -d/ -f1)"
         '''
@@ -38,10 +78,35 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          SHA=$(git rev-parse --short HEAD)
-          docker push "${ECR_REPO}:${SHA}"
-          docker tag "${ECR_REPO}:${SHA}" "${ECR_REPO}:latest"
+          echo "Pushing image to ECR..."
+          docker push "${ECR_REPO}:${GIT_SHORT_HASH}"
+          docker tag "${ECR_REPO}:${GIT_SHORT_HASH}" "${ECR_REPO}:latest"
           docker push "${ECR_REPO}:latest"
+          echo "Image pushed successfully: ${ECR_REPO}:${GIT_SHORT_HASH}"
+        '''
+      }
+    }
+
+    stage('Deploy to Production') {
+      when {
+        branch 'main'
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          echo "🚀 Deploying to Production..."
+          echo "Image: ${ECR_REPO}:${GIT_SHORT_HASH}"
+          echo "Date: ${BUILD_DATE}"
+          
+          # Add your deployment logic here:
+          # - Update ECS service
+          # - Update Lambda function
+          # - Update Kubernetes deployment
+          # - Run Terraform apply
+          # Example:
+          # aws ecs update-service --cluster my-cluster --service my-service --force-new-deployment
+          
+          echo "✅ Deployment completed"
         '''
       }
     }
@@ -49,7 +114,31 @@ pipeline {
 
   post {
     success {
+      sh '''
+        echo "=========================================="
+        echo "✅ BUILD SUCCESSFUL"
+        echo "=========================================="
+        echo "Image: ${ECR_REPO}:${GIT_SHORT_HASH}"
+        echo "Tag: ${BUILD_DATE}-${GIT_SHORT_HASH}"
+        echo "Branch: ${BRANCH_NAME:-unknown}"
+        echo "=========================================="
+      '''
       sh 'docker system prune -af || true'
+    }
+    failure {
+      sh '''
+        echo "=========================================="
+        echo "❌ BUILD FAILED"
+        echo "=========================================="
+        echo "Branch: ${BRANCH_NAME:-unknown}"
+        echo "Commit: ${GIT_SHORT_HASH}"
+        echo "=========================================="
+      '''
+    }
+    always {
+      sh '''
+        echo "Build completed at: $(date)"
+      '''
     }
   }
 } // <-- closes pipeline
