@@ -42,7 +42,6 @@ pipeline {
         '''
       }
     }
-
     stage('Static analysis: golangci-lint') {
       steps {
         sh '''
