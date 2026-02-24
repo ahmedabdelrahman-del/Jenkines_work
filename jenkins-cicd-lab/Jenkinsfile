@@ -13,16 +13,17 @@ pipeline {
   }
 
   stages {
-    stage('Checkout') {
-      steps {
-        checkout scm
-        sh '''
-          set -euo pipefail
-          echo "Commit: $(git rev-parse --short HEAD)"
-          echo "Branch: ${BRANCH_NAME:-unknown}"
-        '''
-      }
-    }
+stage('Checkout') {
+  steps {
+    deleteDir()          // wipe workspace directory safely
+    checkout scm         // fresh clone
+    sh '''
+      set -euo pipefail
+      echo "Commit: $(git rev-parse --short HEAD)"
+      echo "Branch: ${BRANCH_NAME:-unknown}"
+    '''
+  }
+}
 
     stage('Build image') {
       steps {
@@ -58,11 +59,14 @@ pipeline {
     }
   } // <-- closes stages
 
-  post {
-    always {
-      catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+post {
+  always {
+    script {
+      // only attempt docker prune when a workspace/node exists
+      catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS') {
         sh 'docker system prune -af || true'
       }
     }
   }
+}
 } // <-- closes pipeline
