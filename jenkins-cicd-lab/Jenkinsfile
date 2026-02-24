@@ -128,32 +128,28 @@ pipeline {
       }
     }
 
-    stage('Push to ECR') {
-      steps {
-        script {
-          def branch = (env.BRANCH_NAME ?: "manual").replaceAll('[^a-zA-Z0-9_.-]', '-')
-          env.BRANCH_TAG = "branch-${branch}"
-        }
-
-        sh '''
-          set -euo pipefail
-
-          # Tag branch and latest (optional)
-          docker tag "${IMAGE_FULL}" "${ECR_REPO}:${BRANCH_TAG}"
-          docker tag "${IMAGE_FULL}" "${ECR_REPO}:latest"
-
-          docker push "${IMAGE_FULL}"
-          docker push "${ECR_REPO}:${BRANCH_TAG}"
-          docker push "${ECR_REPO}:latest"
-
-          echo "Pushed:"
-          echo " - ${IMAGE_FULL}"
-          echo " - ${ECR_REPO}:${BRANCH_TAG}"
-          echo " - ${ECR_REPO}:latest"
-        '''
-      }
+  stage('Push to ECR') {
+  steps {
+    script {
+      def branch = (env.BRANCH_NAME ?: "manual").replaceAll('[^a-zA-Z0-9_.-]', '-')
+      env.BRANCH_TAG = "branch-${branch}"
+      env.IS_MAIN = (env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'master') ? 'true' : 'false'
     }
+
+    sh '''
+      set -euo pipefail
+
+      docker tag "${IMAGE_FULL}" "${ECR_REPO}:${BRANCH_TAG}"
+      docker push "${IMAGE_FULL}"
+      docker push "${ECR_REPO}:${BRANCH_TAG}"
+
+      if [ "${IS_MAIN}" = "true" ]; then
+        docker tag "${IMAGE_FULL}" "${ECR_REPO}:latest"
+        docker push "${ECR_REPO}:latest"
+      fi
+    '''
   }
+}
 
   post {
     always {
