@@ -15,8 +15,7 @@ pipeline {
   stages {
 stage('Checkout') {
   steps {
-    deleteDir()          // wipe workspace directory safely
-    checkout scm         // fresh clone
+    checkout scm
     sh '''
       set -euo pipefail
       echo "Commit: $(git rev-parse --short HEAD)"
@@ -59,14 +58,9 @@ stage('Checkout') {
     }
   } // <-- closes stages
 
-post {
-  always {
-    script {
-      // only attempt docker prune when a workspace/node exists
-      catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS') {
-        sh 'docker system prune -af || true'
-      }
+  post {
+    success {
+      sh 'docker system prune -af || true'
     }
   }
-}
 } // <-- closes pipeline
