@@ -28,8 +28,8 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          aws ecr get-login-password --region "${AWS_REGION}" \
-            | docker login --username AWS --password-stdin "$(echo "${ECR_REPO}" | cut -d/ -f1)"
+          aws ecr get-login-password --region "${AWS_REGION}" | \
+            docker login --username AWS --password-stdin "$(echo "${ECR_REPO}" | cut -d/ -f1)"
         '''
       }
     }
