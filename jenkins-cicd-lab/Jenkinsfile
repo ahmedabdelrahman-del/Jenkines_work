@@ -42,6 +42,7 @@ pipeline {
         '''
       }
     }
+
     stage('Static analysis: golangci-lint') {
       steps {
         sh '''
@@ -65,7 +66,7 @@ pipeline {
             securego/gosec:2.20.0 \
             -quiet ./...
 
-          # govulncheck (official tool distributed via golang image)
+          # govulncheck
           docker run --rm \
             -v "$PWD":/src -w /src \
             golang:1.22 \
@@ -128,32 +129,33 @@ pipeline {
       }
     }
 
-  stage('Push to ECR') {
-  steps {
-    script {
-      def branch = (env.BRANCH_NAME ?: "manual").replaceAll('[^a-zA-Z0-9_.-]', '-')
-      env.BRANCH_TAG = "branch-${branch}"
-      env.IS_MAIN = (env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'master') ? 'true' : 'false'
+    stage('Push to ECR') {
+      steps {
+        script {
+          def branch = (env.BRANCH_NAME ?: "manual").replaceAll('[^a-zA-Z0-9_.-]', '-')
+          env.BRANCH_TAG = "branch-${branch}"
+          env.IS_MAIN = (env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'master') ? 'true' : 'false'
+        }
+
+        sh '''
+          set -euo pipefail
+
+          docker tag "${IMAGE_FULL}" "${ECR_REPO}:${BRANCH_TAG}"
+          docker push "${IMAGE_FULL}"
+          docker push "${ECR_REPO}:${BRANCH_TAG}"
+
+          if [ "${IS_MAIN}" = "true" ]; then
+            docker tag "${IMAGE_FULL}" "${ECR_REPO}:latest"
+            docker push "${ECR_REPO}:latest"
+          fi
+        '''
+      }
     }
-
-    sh '''
-      set -euo pipefail
-
-      docker tag "${IMAGE_FULL}" "${ECR_REPO}:${BRANCH_TAG}"
-      docker push "${IMAGE_FULL}"
-      docker push "${ECR_REPO}:${BRANCH_TAG}"
-
-      if [ "${IS_MAIN}" = "true" ]; then
-        docker tag "${IMAGE_FULL}" "${ECR_REPO}:latest"
-        docker push "${ECR_REPO}:latest"
-      fi
-    '''
-  }
-}
+  } // <-- closes stages
 
   post {
     always {
       sh 'docker system prune -af || true'
     }
   }
-}
+} // <-- closes pipeline
