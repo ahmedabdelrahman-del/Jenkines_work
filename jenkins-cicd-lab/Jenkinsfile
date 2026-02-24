@@ -63,5 +63,8 @@ stage('Checkout') {
     success {
       sh 'docker system prune -af || true'
     }
+    always {
+      cleanWs()
+    }
   }
 } // <-- closes pipeline
