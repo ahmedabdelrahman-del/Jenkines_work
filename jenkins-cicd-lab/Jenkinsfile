@@ -4,7 +4,6 @@ pipeline {
   options {
     timestamps()
     disableConcurrentBuilds()
-    skipDefaultCheckout()
   }
 
   environment {
@@ -14,17 +13,6 @@ pipeline {
   }
 
   stages {
-stage('Checkout') {
-  steps {
-    checkout scm
-    sh '''
-      set -euo pipefail
-      echo "Commit: $(git rev-parse --short HEAD)"
-      echo "Branch: ${BRANCH_NAME:-unknown}"
-    '''
-  }
-}
-
     stage('Build image') {
       steps {
         sh '''
@@ -62,9 +50,6 @@ stage('Checkout') {
   post {
     success {
       sh 'docker system prune -af || true'
-    }
-    always {
-      cleanWs()
     }
   }
 } // <-- closes pipeline
