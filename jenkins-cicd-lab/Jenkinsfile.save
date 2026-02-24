@@ -1,0 +1,161 @@
+pipeline {
+  agent any
+
+  options {
+    timestamps()
+    ansiColor('xterm')
+    disableConcurrentBuilds()
+  }
+
+  environment {
+    AWS_REGION = 'us-east-1'
+    ECR_REPO   = '646977526611.dkr.ecr.us-east-1.amazonaws.com/cicd-lab/demo-app'
+    IMAGE_NAME = 'go-microservice'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        sh '''
+          set -euo pipefail
+          echo "Commit: $(git rev-parse --short HEAD)"
+          echo "Branch: ${BRANCH_NAME:-unknown}"
+        '''
+      }
+    }
+
+    stage('Go format + vet + tests') {
+      steps {
+        sh '''
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD":/src -w /src \
+            -e CGO_ENABLED=0 \
+            golang:1.22 \
+            bash -lc '
+              go version
+              go fmt ./...
+              go vet ./...
+              go test -v ./... -race
+            '
+        '''
+      }
+    }
+
+    stage('Static analysis: golangci-lint') {
+      steps {
+        sh '''
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD":/src -w /src \
+            golangci/golangci-lint:v1.56.2 \
+            golangci-lint run --timeout=5m
+        '''
+      }
+    }
+
+    stage('Security: gosec + govulncheck') {
+      steps {
+        sh '''
+          set -euo pipefail
+
+          # gosec
+          docker run --rm \
+            -v "$PWD":/src -w /src \
+            securego/gosec:2.20.0 \
+            -quiet ./...
+
+          # govulncheck
+          docker run --rm \
+            -v "$PWD":/src -w /src \
+            golang:1.22 \
+            bash -lc '
+              go install golang.org/x/vuln/cmd/govulncheck@latest
+              govulncheck ./...
+            '
+        '''
+      }
+    }
+
+    stage('Filesystem vuln scan: Trivy') {
+      steps {
+        sh '''
+          set -euo pipefail
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD":/work -w /work \
+            aquasec/trivy:0.49.1 \
+            fs --scanners vuln,secret,misconfig --exit-code 1 --severity HIGH,CRITICAL .
+        '''
+      }
+    }
+
+    stage('Build image') {
+      steps {
+        script {
+          def sha = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+          env.IMAGE_TAG = "${sha}"
+          env.IMAGE_FULL = "${env.ECR_REPO}:${env.IMAGE_TAG}"
+        }
+
+        sh '''
+          set -euo pipefail
+          docker build -t "${IMAGE_FULL}" .
+        '''
+      }
+    }
+
+    stage('Image vuln scan: Trivy') {
+      steps {
+        sh '''
+          set -euo pipefail
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.49.1 \
+            image --exit-code 1 --severity HIGH,CRITICAL "${IMAGE_FULL}"
+        '''
+      }
+    }
+
+    stage('Login to ECR') {
+      steps {
+        sh '''
+          set -euo pipefail
+          aws --version
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login --username AWS --password-stdin "$(echo "${ECR_REPO}" | cut -d/ -f1)"
+        '''
+      }
+    }
+
+    stage('Push to ECR') {
+      steps {
+        script {
+          def branch = (env.BRANCH_NAME ?: "manual").replaceAll('[^a-zA-Z0-9_.-]', '-')
+          env.BRANCH_TAG = "branch-${branch}"
+          env.IS_MAIN = (env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'master') ? 'true' : 'false'
+        }
+
+        sh '''
+          set -euo pipefail
+
+          docker tag "${IMAGE_FULL}" "${ECR_REPO}:${BRANCH_TAG}"
+          docker push "${IMAGE_FULL}"
+          docker push "${ECR_REPO}:${BRANCH_TAG}"
+
+          if [ "${IS_MAIN}" = "true" ]; then
+            docker tag "${IMAGE_FULL}" "${ECR_REPO}:latest"
+            docker push "${ECR_REPO}:latest"
+          fi
+        '''
+      }
+    }
+  } // <-- closes stages
+
+  post {
+    always {
+      sh 'docker system prune -af || true'
+    }
+  }
+} // <-- closes pipeline
